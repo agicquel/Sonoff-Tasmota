@@ -39,56 +39,22 @@ Ticker TickerRtc;
 static const uint8_t kDaysInMonth[] = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 }; // API starts months from 1, this array starts from 0
 static const char kMonthNamesEnglish[] = "JanFebMarAprMayJunJulAugSepOctNovDec";
 
-struct RTC {
-  uint32_t utc_time = 0;
-  uint32_t local_time = 0;
-  uint32_t daylight_saving_time = 0;
-  uint32_t standard_time = 0;
-  uint32_t ntp_time = 0;
-  uint32_t midnight = 0;
-  uint32_t restart_time = 0;
-  int32_t drift_time = 0;
-  int32_t time_timezone = 0;
-  uint8_t ntp_sync_minute = 0;
-  bool midnight_now = false;
-  bool user_time_entry = false;               // Override NTP by user setting
-} Rtc;
-
-uint32_t UtcTime(void)
-{
-  return Rtc.utc_time;
-}
-
-uint32_t LocalTime(void)
-{
-  return Rtc.local_time;
-}
+uint32_t utc_time = 0;
+uint32_t local_time = 0;
+uint32_t daylight_saving_time = 0;
+uint32_t standard_time = 0;
+uint32_t ntp_time = 0;
+uint32_t midnight = 0;
+uint32_t restart_time = 0;
+int32_t  drift_time = 0;
+int32_t  time_timezone = 0;
+uint8_t  midnight_now = 0;
+uint8_t  ntp_sync_minute = 0;
+bool user_time_entry = false;               // Override NTP by user setting
 
 int32_t DriftTime(void)
 {
-  return Rtc.drift_time;
-}
-
-uint32_t Midnight(void)
-{
-  return Rtc.midnight;
-}
-
-bool MidnightNow(void)
-{
-  if (Rtc.midnight_now) {
-    Rtc.midnight_now = false;
-    return true;
-  }
-  return false;
-}
-
-bool IsDst(void)
-{
-  if (Rtc.time_timezone == Settings.toffset[1]) {
-    return true;
-  }
-  return false;
+  return drift_time;
 }
 
 String GetBuildDateAndTime(void)
@@ -124,7 +90,7 @@ String GetTimeZone(void)
 {
   char tz[7];
 
-  snprintf_P(tz, sizeof(tz), PSTR("%+03d:%02d"), Rtc.time_timezone / 60, abs(Rtc.time_timezone % 60));
+  snprintf_P(tz, sizeof(tz), PSTR("%+03d:%02d"), time_timezone / 60, abs(time_timezone % 60));
 
   return String(tz);  // -03:45
 }
@@ -174,20 +140,20 @@ String GetDT(uint32_t time)
 String GetDateAndTime(uint8_t time_type)
 {
   // "2017-03-07T11:08:02-07:00" - ISO8601:2004
-  uint32_t time = Rtc.local_time;
+  uint32_t time = local_time;
 
   switch (time_type) {
     case DT_ENERGY:
       time = Settings.energy_kWhtotal_time;
       break;
     case DT_UTC:
-      time = Rtc.utc_time;
+      time = utc_time;
       break;
     case DT_RESTART:
-      if (Rtc.restart_time == 0) {
+      if (restart_time == 0) {
         return "";
       }
-      time = Rtc.restart_time;
+      time = restart_time;
       break;
   }
   String dt = GetDT(time);  // 2017-03-07T11:08:02
@@ -205,10 +171,10 @@ String GetTime(int type)
    */
   char stime[25];   // Skip newline
 
-  uint32_t time = Rtc.utc_time;
-  if (1 == type) time = Rtc.local_time;
-  if (2 == type) time = Rtc.daylight_saving_time;
-  if (3 == type) time = Rtc.standard_time;
+  uint32_t time = utc_time;
+  if (1 == type) time = local_time;
+  if (2 == type) time = daylight_saving_time;
+  if (3 == type) time = standard_time;
   snprintf_P(stime, sizeof(stime), sntp_get_real_time(time));
 
   return String(stime);  // Thu Nov 01 11:41:02 2018
@@ -216,8 +182,8 @@ String GetTime(int type)
 
 uint32_t UpTime(void)
 {
-  if (Rtc.restart_time) {
-    return Rtc.utc_time - Rtc.restart_time;
+  if (restart_time) {
+    return utc_time - restart_time;
   } else {
     return uptime;
   }
@@ -365,80 +331,102 @@ uint32_t RuleToTime(TimeRule r, int yr)
   return t;
 }
 
+uint32_t UtcTime(void)
+{
+  return utc_time;
+}
+
+uint32_t LocalTime(void)
+{
+  return local_time;
+}
+
+uint32_t Midnight(void)
+{
+  return midnight;
+}
+
+bool MidnightNow(void)
+{
+  bool mnflg = midnight_now;
+  if (mnflg) midnight_now = 0;
+  return mnflg;
+}
+
 void RtcSecond(void)
 {
   TIME_T tmpTime;
 
-  if (!Rtc.user_time_entry) {
-    if ((Rtc.ntp_sync_minute > 59) && (RtcTime.minute > 2)) Rtc.ntp_sync_minute = 1;                 // If sync prepare for a new cycle
+  if (!user_time_entry) {
+    if ((ntp_sync_minute > 59) && (RtcTime.minute > 2)) ntp_sync_minute = 1;                 // If sync prepare for a new cycle
     uint8_t offset = (uptime < 30) ? RtcTime.second : (((ESP.getChipId() & 0xF) * 3) + 3) ;  // First try ASAP to sync. If fails try once every 60 seconds based on chip id
-    if (!global_state.wifi_down && (((offset == RtcTime.second) && ((RtcTime.year < 2016) || (Rtc.ntp_sync_minute == RtcTime.minute))) || ntp_force_sync)) {
-      Rtc.ntp_time = sntp_get_current_timestamp();
-      if (Rtc.ntp_time > 1451602800) {  // Fix NTP bug in core 2.4.1/SDK 2.2.1 (returns Thu Jan 01 08:00:10 1970 after power on)
+    if (!global_state.wifi_down && (((offset == RtcTime.second) && ((RtcTime.year < 2016) || (ntp_sync_minute == RtcTime.minute))) || ntp_force_sync)) {
+      ntp_time = sntp_get_current_timestamp();
+      if (ntp_time > 1451602800) {  // Fix NTP bug in core 2.4.1/SDK 2.2.1 (returns Thu Jan 01 08:00:10 1970 after power on)
         ntp_force_sync = false;
-        if (Rtc.utc_time > 1451602800) { Rtc.drift_time = Rtc.ntp_time - Rtc.utc_time; }
-        Rtc.utc_time = Rtc.ntp_time;
-        Rtc.ntp_sync_minute = 60;  // Sync so block further requests
-        if (Rtc.restart_time == 0) {
-          Rtc.restart_time = Rtc.utc_time - uptime;  // save first ntp time as restart time
+        if (utc_time > 1451602800) { drift_time = ntp_time - utc_time; }
+        utc_time = ntp_time;
+        ntp_sync_minute = 60;  // Sync so block further requests
+        if (restart_time == 0) {
+          restart_time = utc_time - uptime;  // save first ntp time as restart time
         }
-        BreakTime(Rtc.utc_time, tmpTime);
+        BreakTime(utc_time, tmpTime);
         RtcTime.year = tmpTime.year + 1970;
-        Rtc.daylight_saving_time = RuleToTime(Settings.tflag[1], RtcTime.year);
-        Rtc.standard_time = RuleToTime(Settings.tflag[0], RtcTime.year);
+        daylight_saving_time = RuleToTime(Settings.tflag[1], RtcTime.year);
+        standard_time = RuleToTime(Settings.tflag[0], RtcTime.year);
 
         // Do not use AddLog here if syslog is enabled. UDP will force exception 9
   //      AddLog_P2(LOG_LEVEL_DEBUG, PSTR(D_LOG_APPLICATION "(" D_UTC_TIME ") %s, (" D_DST_TIME ") %s, (" D_STD_TIME ") %s"), GetTime(0).c_str(), GetTime(2).c_str(), GetTime(3).c_str());
         ntp_synced_message = true;
 
-        if (Rtc.local_time < 1451602800) {  // 2016-01-01
+        if (local_time < 1451602800) {  // 2016-01-01
           rules_flag.time_init = 1;
         } else {
           rules_flag.time_set = 1;
         }
       } else {
-        Rtc.ntp_sync_minute++;  // Try again in next minute
+        ntp_sync_minute++;  // Try again in next minute
       }
     }
   }
-  Rtc.utc_time++;
-  Rtc.local_time = Rtc.utc_time;
-  if (Rtc.local_time > 1451602800) {  // 2016-01-01
+  utc_time++;
+  local_time = utc_time;
+  if (local_time > 1451602800) {  // 2016-01-01
     int16_t timezone_minutes = Settings.timezone_minutes;
     if (Settings.timezone < 0) { timezone_minutes *= -1; }
-    Rtc.time_timezone = (Settings.timezone * SECS_PER_HOUR) + (timezone_minutes * SECS_PER_MIN);
+    time_timezone = (Settings.timezone * SECS_PER_HOUR) + (timezone_minutes * SECS_PER_MIN);
     if (99 == Settings.timezone) {
       int32_t dstoffset = Settings.toffset[1] * SECS_PER_MIN;
       int32_t stdoffset = Settings.toffset[0] * SECS_PER_MIN;
       if (Settings.tflag[1].hemis) {
         // Southern hemisphere
-        if ((Rtc.utc_time >= (Rtc.standard_time - dstoffset)) && (Rtc.utc_time < (Rtc.daylight_saving_time - stdoffset))) {
-          Rtc.time_timezone = stdoffset;  // Standard Time
+        if ((utc_time >= (standard_time - dstoffset)) && (utc_time < (daylight_saving_time - stdoffset))) {
+          time_timezone = stdoffset;  // Standard Time
         } else {
-          Rtc.time_timezone = dstoffset;  // Daylight Saving Time
+          time_timezone = dstoffset;  // Daylight Saving Time
         }
       } else {
         // Northern hemisphere
-        if ((Rtc.utc_time >= (Rtc.daylight_saving_time - stdoffset)) && (Rtc.utc_time < (Rtc.standard_time - dstoffset))) {
-          Rtc.time_timezone = dstoffset;  // Daylight Saving Time
+        if ((utc_time >= (daylight_saving_time - stdoffset)) && (utc_time < (standard_time - dstoffset))) {
+          time_timezone = dstoffset;  // Daylight Saving Time
         } else {
-          Rtc.time_timezone = stdoffset;  // Standard Time
+          time_timezone = stdoffset;  // Standard Time
         }
       }
     }
-    Rtc.local_time += Rtc.time_timezone;
-    Rtc.time_timezone /= 60;
-    if (!Settings.energy_kWhtotal_time) { Settings.energy_kWhtotal_time = Rtc.local_time; }
+    local_time += time_timezone;
+    time_timezone /= 60;
+    if (!Settings.energy_kWhtotal_time) { Settings.energy_kWhtotal_time = local_time; }
   }
-  BreakTime(Rtc.local_time, RtcTime);
+  BreakTime(local_time, RtcTime);
 
   if (RtcTime.valid) {
-    if (!Rtc.midnight) {
-      Rtc.midnight = Rtc.local_time - (RtcTime.hour * 3600) - (RtcTime.minute * 60) - RtcTime.second;
+    if (!midnight) {
+      midnight = local_time - (RtcTime.hour * 3600) - (RtcTime.minute * 60) - RtcTime.second;
     }
     if (!RtcTime.hour && !RtcTime.minute && !RtcTime.second) {
-      Rtc.midnight = Rtc.local_time;
-      Rtc.midnight_now = true;
+      midnight = local_time;
+      midnight_now = 1;
     }
   }
 
@@ -448,11 +436,11 @@ void RtcSecond(void)
 void RtcSetTime(uint32_t epoch)
 {
   if (epoch < 1451602800) {  // 2016-01-01
-    Rtc.user_time_entry = false;
+    user_time_entry = false;
     ntp_force_sync = true;
   } else {
-    Rtc.user_time_entry = true;
-    Rtc.utc_time = epoch -1;    // Will be corrected by RtcSecond
+    user_time_entry = true;
+    utc_time = epoch -1;
   }
   RtcSecond();
 }
@@ -465,7 +453,7 @@ void RtcInit(void)
   sntp_stop();
   sntp_set_timezone(0);      // UTC time
   sntp_init();
-  Rtc.utc_time = 0;
-  BreakTime(Rtc.utc_time, RtcTime);
+  utc_time = 0;
+  BreakTime(utc_time, RtcTime);
   TickerRtc.attach(1, RtcSecond);
 }

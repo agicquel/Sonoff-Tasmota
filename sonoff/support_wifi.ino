@@ -29,26 +29,40 @@
 #endif
 
 const uint8_t WIFI_CONFIG_SEC = 180;       // seconds before restart
-const uint8_t WIFI_CHECK_SEC = 20;         // seconds
+const uint8_t WIFI_CHECK_SEC  = 180;         // seconds
 const uint8_t WIFI_RETRY_OFFSET_SEC = 20;  // seconds
 
-#include <ESP8266WiFi.h>                   // Wifi, MQTT, Ota, WifiManager
+/*
+// This worked for 2_5_0_BETA2 but fails since then. Waiting for a solution from core team (#4952)
+#ifdef USE_MQTT_TLS
+#if defined(ARDUINO_ESP8266_RELEASE_2_3_0) || defined(ARDUINO_ESP8266_RELEASE_2_4_0) || defined(ARDUINO_ESP8266_RELEASE_2_4_1) || defined(ARDUINO_ESP8266_RELEASE_2_4_2)
+#else
+#define USING_AXTLS
+#include <ESP8266WiFi.h>
+// force use of AxTLS (BearSSL is now default) which uses less memory (#4952)
+#include <WiFiClientSecureAxTLS.h>
+using namespace axTLS;
+#endif  // ARDUINO_ESP8266_RELEASE prior to 2_5_0
+#else
+#include <ESP8266WiFi.h>            // Wifi, MQTT, Ota, WifiManager
+#endif  // USE_MQTT_TLS
+*/
+#include <ESP8266WiFi.h>            // Wifi, MQTT, Ota, WifiManager
 
-struct WIFI {
-  uint32_t last_event = 0;                 // Last wifi connection event
-  uint32_t downtime = 0;                   // Wifi down duration
-  uint16_t link_count = 0;                 // Number of wifi re-connect
-  uint8_t counter;
-  uint8_t retry_init;
-  uint8_t retry;
-  uint8_t status;
-  uint8_t wps_result;
-  uint8_t config_type = 0;
-  uint8_t config_counter = 0;
-  uint8_t mdns_begun = 0;                  // mDNS active
-  uint8_t scan_state;
-  uint8_t bssid[6];
-} Wifi;
+uint32_t wifi_last_event = 0;       // Last wifi connection event
+uint32_t wifi_downtime = 0;         // Wifi down duration
+uint16_t wifi_link_count = 0;       // Number of wifi re-connect
+uint8_t wifi_counter;
+uint8_t wifi_retry_init;
+uint8_t wifi_retry;
+uint8_t wifi_status;
+uint8_t wps_result;
+uint8_t wifi_config_type = 0;
+uint8_t wifi_config_counter = 0;
+uint8_t mdns_begun = 0;             // mDNS active
+
+uint8_t wifi_scan_state;
+uint8_t wifi_bssid[6];
 
 int WifiGetRssiAsQuality(int rssi)
 {
@@ -66,10 +80,10 @@ int WifiGetRssiAsQuality(int rssi)
 
 bool WifiConfigCounter(void)
 {
-  if (Wifi.config_counter) {
-    Wifi.config_counter = WIFI_CONFIG_SEC;
+  if (wifi_config_counter) {
+    wifi_config_counter = WIFI_CONFIG_SEC;
   }
-  return (Wifi.config_counter);
+  return (wifi_config_counter);
 }
 
 extern "C" {
@@ -89,23 +103,23 @@ void WifiWpsStatusCallback(wps_cb_status status)
     WPS_CB_ST_SCAN_ERR, // can not find the target WPS AP
   };
 */
-  Wifi.wps_result = status;
-  if (WPS_CB_ST_SUCCESS == Wifi.wps_result) {
+  wps_result = status;
+  if (WPS_CB_ST_SUCCESS == wps_result) {
     wifi_wps_disable();
   } else {
-    AddLog_P2(LOG_LEVEL_DEBUG, PSTR(D_LOG_WIFI D_WPS_FAILED_WITH_STATUS " %d"), Wifi.wps_result);
-    Wifi.config_counter = 2;
+    AddLog_P2(LOG_LEVEL_DEBUG, PSTR(D_LOG_WIFI D_WPS_FAILED_WITH_STATUS " %d"), wps_result);
+    wifi_config_counter = 2;
   }
 }
 
 bool WifiWpsConfigDone(void)
 {
-  return (!Wifi.wps_result);
+  return (!wps_result);
 }
 
 bool WifiWpsConfigBegin(void)
 {
-  Wifi.wps_result = 99;
+  wps_result = 99;
   if (!wifi_wps_disable()) { return false; }
   if (!wifi_wps_enable(WPS_TYPE_PBC)) { return false; }  // so far only WPS_TYPE_PBC is supported (SDK 2.0.0)
   if (!wifi_set_wps_cb((wps_st_cb_t) &WifiWpsStatusCallback)) { return false; }
@@ -115,54 +129,54 @@ bool WifiWpsConfigBegin(void)
 
 void WifiConfig(uint8_t type)
 {
-  if (!Wifi.config_type) {
+  if (!wifi_config_type) {
     if ((WIFI_RETRY == type) || (WIFI_WAIT == type)) { return; }
 #ifdef USE_EMULATION
     UdpDisconnect();
 #endif  // USE_EMULATION
     WiFi.disconnect();                       // Solve possible Wifi hangs
-    Wifi.config_type = type;
+    wifi_config_type = type;
 
 #ifndef USE_WPS
-    if (WIFI_WPSCONFIG == Wifi.config_type) { Wifi.config_type = WIFI_MANAGER; }
+    if (WIFI_WPSCONFIG == wifi_config_type) { wifi_config_type = WIFI_MANAGER; }
 #endif  // USE_WPS
 #ifndef USE_WEBSERVER
-    if (WIFI_MANAGER == Wifi.config_type) { Wifi.config_type = WIFI_SMARTCONFIG; }
+    if (WIFI_MANAGER == wifi_config_type) { wifi_config_type = WIFI_SMARTCONFIG; }
 #endif  // USE_WEBSERVER
 #ifndef USE_SMARTCONFIG
-    if (WIFI_SMARTCONFIG == Wifi.config_type) { Wifi.config_type = WIFI_SERIAL; }
+    if (WIFI_SMARTCONFIG == wifi_config_type) { wifi_config_type = WIFI_SERIAL; }
 #endif  // USE_SMARTCONFIG
 
-    Wifi.config_counter = WIFI_CONFIG_SEC;   // Allow up to WIFI_CONFIG_SECS seconds for phone to provide ssid/pswd
-    Wifi.counter = Wifi.config_counter +5;
+    wifi_config_counter = WIFI_CONFIG_SEC;   // Allow up to WIFI_CONFIG_SECS seconds for phone to provide ssid/pswd
+    wifi_counter = wifi_config_counter +5;
     blinks = 1999;
-    if (WIFI_RESTART == Wifi.config_type) {
+    if (WIFI_RESTART == wifi_config_type) {
       restart_flag = 2;
     }
-    else if (WIFI_SERIAL == Wifi.config_type) {
+    else if (WIFI_SERIAL == wifi_config_type) {
       AddLog_P(LOG_LEVEL_INFO, S_LOG_WIFI, PSTR(D_WCFG_6_SERIAL " " D_ACTIVE_FOR_3_MINUTES));
     }
 #ifdef USE_SMARTCONFIG
-    else if (WIFI_SMARTCONFIG == Wifi.config_type) {
+    else if (WIFI_SMARTCONFIG == wifi_config_type) {
       AddLog_P(LOG_LEVEL_INFO, S_LOG_WIFI, PSTR(D_WCFG_1_SMARTCONFIG " " D_ACTIVE_FOR_3_MINUTES));
       WiFi.mode(WIFI_STA);      // Disable AP mode
       WiFi.beginSmartConfig();
     }
 #endif  // USE_SMARTCONFIG
 #ifdef USE_WPS
-    else if (WIFI_WPSCONFIG == Wifi.config_type) {
+    else if (WIFI_WPSCONFIG == wifi_config_type) {
       if (WifiWpsConfigBegin()) {
         AddLog_P(LOG_LEVEL_INFO, S_LOG_WIFI, PSTR(D_WCFG_3_WPSCONFIG " " D_ACTIVE_FOR_3_MINUTES));
       } else {
         AddLog_P(LOG_LEVEL_INFO, S_LOG_WIFI, PSTR(D_WCFG_3_WPSCONFIG " " D_FAILED_TO_START));
-        Wifi.config_counter = 3;
+        wifi_config_counter = 3;
       }
     }
 #endif  // USE_WPS
 #ifdef USE_WEBSERVER
-    else if (WIFI_MANAGER == Wifi.config_type || WIFI_MANAGER_RESET_ONLY == Wifi.config_type) {
+    else if (WIFI_MANAGER == wifi_config_type || WIFI_MANAGER_RESET_ONLY == wifi_config_type) {
       AddLog_P(LOG_LEVEL_INFO, S_LOG_WIFI, PSTR(D_WCFG_2_WIFIMANAGER " " D_ACTIVE_FOR_3_MINUTES));
-      WifiManagerBegin(WIFI_MANAGER_RESET_ONLY == Wifi.config_type);
+      WifiManagerBegin(WIFI_MANAGER_RESET_ONLY == wifi_config_type);
     }
 #endif  // USE_WEBSERVER
   }
@@ -229,7 +243,7 @@ void WifiBegin(uint8_t flag, uint8_t channel)
   }
   WiFi.hostname(my_hostname);
   if (channel) {
-    WiFi.begin(Settings.sta_ssid[Settings.sta_active], Settings.sta_pwd[Settings.sta_active], channel, Wifi.bssid);
+    WiFi.begin(Settings.sta_ssid[Settings.sta_active], Settings.sta_pwd[Settings.sta_active], channel, wifi_bssid);
   } else {
     WiFi.begin(Settings.sta_ssid[Settings.sta_active], Settings.sta_pwd[Settings.sta_active]);
   }
@@ -242,43 +256,43 @@ void WifiBeginAfterScan()
   static int8_t best_network_db;
 
   // Not active
-  if (0 == Wifi.scan_state) { return; }
+  if (0 == wifi_scan_state) { return; }
   // Init scan when not connected
-  if (1 == Wifi.scan_state) {
-    memset((void*) &Wifi.bssid, 0, sizeof(Wifi.bssid));
+  if (1 == wifi_scan_state) {
+    memset((void*) &wifi_bssid, 0, sizeof(wifi_bssid));
     best_network_db = -127;
-    Wifi.scan_state = 3;
+    wifi_scan_state = 3;
   }
   // Init scan when connected
-  if (2 == Wifi.scan_state) {
+  if (2 == wifi_scan_state) {
     uint8_t* bssid = WiFi.BSSID();                  // Get current bssid
-    memcpy((void*) &Wifi.bssid, (void*) bssid, sizeof(Wifi.bssid));
+    memcpy((void*) &wifi_bssid, (void*) bssid, sizeof(wifi_bssid));
     best_network_db = WiFi.RSSI();                  // Get current rssi and add threshold
     if (best_network_db < -WIFI_RSSI_THRESHOLD) { best_network_db += WIFI_RSSI_THRESHOLD; }
-    Wifi.scan_state = 3;
+    wifi_scan_state = 3;
   }
   // Init scan
-  if (3 == Wifi.scan_state) {
+  if (3 == wifi_scan_state) {
     if (WiFi.scanComplete() != WIFI_SCAN_RUNNING) {
       WiFi.scanNetworks(true);                      // Start wifi scan async
-      Wifi.scan_state++;
+      wifi_scan_state++;
       AddLog_P(LOG_LEVEL_DEBUG, S_LOG_WIFI, PSTR("Network (re)scan started..."));
       return;
     }
   }
   int8_t wifi_scan_result = WiFi.scanComplete();
   // Check scan done
-  if (4 == Wifi.scan_state) {
+  if (4 == wifi_scan_state) {
     if (wifi_scan_result != WIFI_SCAN_RUNNING) {
-      Wifi.scan_state++;
+      wifi_scan_state++;
     }
   }
   // Scan done
-  if (5 == Wifi.scan_state) {
+  if (5 == wifi_scan_state) {
     int32_t channel = 0;                            // No scan result
     int8_t ap = 3;                                  // AP default if not found
     uint8_t last_bssid[6];                          // Save last bssid
-    memcpy((void*) &last_bssid, (void*) &Wifi.bssid, sizeof(last_bssid));
+    memcpy((void*) &last_bssid, (void*) &wifi_bssid, sizeof(last_bssid));
 
     if (wifi_scan_result > 0) {
       // Networks found
@@ -303,7 +317,7 @@ void WifiBeginAfterScan()
                 best_network_db = (int8_t)rssi_scan;
                 channel = chan_scan;
                 ap = j;                             // AP1 or AP2
-                memcpy((void*) &Wifi.bssid, (void*) bssid_scan, sizeof(Wifi.bssid));
+                memcpy((void*) &wifi_bssid, (void*) bssid_scan, sizeof(wifi_bssid));
               }
             }
             break;
@@ -323,10 +337,10 @@ void WifiBeginAfterScan()
       WiFi.scanDelete();                            // Clean up Ram
       delay(0);
     }
-    Wifi.scan_state = 0;
+    wifi_scan_state = 0;
     // If bssid changed then (re)connect wifi
-    for (uint32_t i = 0; i < sizeof(Wifi.bssid); i++) {
-      if (last_bssid[i] != Wifi.bssid[i]) {
+    for (uint32_t i = 0; i < sizeof(wifi_bssid); i++) {
+      if (last_bssid[i] != wifi_bssid[i]) {
         WifiBegin(ap, channel);                     // 0 (AP1), 1 (AP2) or 3 (default AP)
         break;
       }
@@ -336,12 +350,12 @@ void WifiBeginAfterScan()
 
 uint16_t WifiLinkCount()
 {
-  return Wifi.link_count;
+  return wifi_link_count;
 }
 
 String WifiDowntime()
 {
-  return GetDuration(Wifi.downtime);
+  return GetDuration(wifi_downtime);
 }
 
 void WifiSetState(uint8_t state)
@@ -349,11 +363,11 @@ void WifiSetState(uint8_t state)
   if (state == global_state.wifi_down) {
     if (state) {
       rules_flag.wifi_connected = 1;
-      Wifi.link_count++;
-      Wifi.downtime += UpTime() - Wifi.last_event;
+      wifi_link_count++;
+      wifi_downtime += UpTime() - wifi_last_event;
     } else {
       rules_flag.wifi_disconnected = 1;
-      Wifi.last_event = UpTime();
+      wifi_last_event = UpTime();
     }
   }
   global_state.wifi_down = state ^1;
@@ -363,19 +377,19 @@ void WifiCheckIp(void)
 {
   if ((WL_CONNECTED == WiFi.status()) && (static_cast<uint32_t>(WiFi.localIP()) != 0)) {
     WifiSetState(1);
-    Wifi.counter = WIFI_CHECK_SEC;
-    Wifi.retry = Wifi.retry_init;
-    AddLog_P((Wifi.status != WL_CONNECTED) ? LOG_LEVEL_INFO : LOG_LEVEL_DEBUG_MORE, S_LOG_WIFI, PSTR(D_CONNECTED));
-    if (Wifi.status != WL_CONNECTED) {
+    wifi_counter = WIFI_CHECK_SEC;
+    wifi_retry = wifi_retry_init;
+    AddLog_P((wifi_status != WL_CONNECTED) ? LOG_LEVEL_INFO : LOG_LEVEL_DEBUG_MORE, S_LOG_WIFI, PSTR(D_CONNECTED));
+    if (wifi_status != WL_CONNECTED) {
 //      AddLog_P(LOG_LEVEL_INFO, PSTR("Wifi: Set IP addresses"));
       Settings.ip_address[1] = (uint32_t)WiFi.gatewayIP();
       Settings.ip_address[2] = (uint32_t)WiFi.subnetMask();
       Settings.ip_address[3] = (uint32_t)WiFi.dnsIP();
     }
-    Wifi.status = WL_CONNECTED;
+    wifi_status = WL_CONNECTED;
 #ifdef USE_DISCOVERY
 #ifdef WEBSERVER_ADVERTISE
-    if (2 == Wifi.mdns_begun) {
+    if (2 == mdns_begun) {
       MDNS.update();
       AddLog_P(LOG_LEVEL_DEBUG_MORE, D_LOG_MDNS, "MDNS.update");
     }
@@ -384,73 +398,80 @@ void WifiCheckIp(void)
   } else {
     WifiSetState(0);
     uint8_t wifi_config_tool = Settings.sta_config;
-    Wifi.status = WiFi.status();
-    switch (Wifi.status) {
+    wifi_status = WiFi.status();
+    switch (wifi_status) {
       case WL_CONNECTED:
         AddLog_P(LOG_LEVEL_INFO, S_LOG_WIFI, PSTR(D_CONNECT_FAILED_NO_IP_ADDRESS));
-        Wifi.status = 0;
-        Wifi.retry = Wifi.retry_init;
+        wifi_status = 0;
+        wifi_retry = wifi_retry_init;
         break;
       case WL_NO_SSID_AVAIL:
         AddLog_P(LOG_LEVEL_INFO, S_LOG_WIFI, PSTR(D_CONNECT_FAILED_AP_NOT_REACHED));
         if (WIFI_WAIT == Settings.sta_config) {
-          Wifi.retry = Wifi.retry_init;
+          wifi_retry = wifi_retry_init;
         } else {
-          if (Wifi.retry > (Wifi.retry_init / 2)) {
-            Wifi.retry = Wifi.retry_init / 2;
+          if (wifi_retry > (wifi_retry_init / 2)) {
+            wifi_retry = wifi_retry_init / 2;
           }
-          else if (Wifi.retry) {
-            Wifi.retry = 0;
+          else if (wifi_retry) {
+            wifi_retry = 0;
           }
         }
         break;
       case WL_CONNECT_FAILED:
         AddLog_P(LOG_LEVEL_INFO, S_LOG_WIFI, PSTR(D_CONNECT_FAILED_WRONG_PASSWORD));
-        if (Wifi.retry > (Wifi.retry_init / 2)) {
-          Wifi.retry = Wifi.retry_init / 2;
+        if (wifi_retry > (wifi_retry_init / 2)) {
+          wifi_retry = wifi_retry_init / 2;
         }
-        else if (Wifi.retry) {
-          Wifi.retry = 0;
+        else if (wifi_retry) {
+          wifi_retry = 0;
         }
         break;
       default:  // WL_IDLE_STATUS and WL_DISCONNECTED
-        if (!Wifi.retry || ((Wifi.retry_init / 2) == Wifi.retry)) {
+        if (!wifi_retry || ((wifi_retry_init / 2) == wifi_retry)) {
           AddLog_P(LOG_LEVEL_INFO, S_LOG_WIFI, PSTR(D_CONNECT_FAILED_AP_TIMEOUT));
+          /****************************************************************************************\
+          \****************************************************************************************/
+            char * reset_ssid = "SSID 1";
+            ExecuteCommand(reset_ssid, SRC_BUTTON);
+          /****************************************************************************************\
+          \****************************************************************************************/
         } else {
           if (('\0' == Settings.sta_ssid[0][0]) && ('\0' == Settings.sta_ssid[1][0])) {
             wifi_config_tool = WIFI_CONFIG_NO_SSID;    // Skip empty SSIDs and start Wifi config tool
-            Wifi.retry = 0;
+            wifi_retry = 0;
           } else {
             AddLog_P(LOG_LEVEL_DEBUG, S_LOG_WIFI, PSTR(D_ATTEMPTING_CONNECTION));
           }
         }
     }
-    if (Wifi.retry) {
+    if (wifi_retry) {
       if (Settings.flag3.use_wifi_scan) {
-        if (Wifi.retry_init == Wifi.retry) {
-          Wifi.scan_state = 1;    // Select scanned SSID
+        if (wifi_retry_init == wifi_retry) {
+          wifi_scan_state = 1;    // Select scanned SSID
         }
       } else {
-        if (Wifi.retry_init == Wifi.retry) {
+        if (wifi_retry_init == wifi_retry) {
           WifiBegin(3, 0);        // Select default SSID
         }
-        if ((Settings.sta_config != WIFI_WAIT) && ((Wifi.retry_init / 2) == Wifi.retry)) {
+        if ((Settings.sta_config != WIFI_WAIT) && ((wifi_retry_init / 2) == wifi_retry)) {
           WifiBegin(2, 0);        // Select alternate SSID
         }
       }
-      Wifi.counter = 1;
-      Wifi.retry--;
+      wifi_counter = 1;
+      wifi_retry--;
     } else {
       WifiConfig(wifi_config_tool);
-      Wifi.counter = 1;
-      Wifi.retry = Wifi.retry_init;
+      wifi_counter = 1;
+      wifi_retry = wifi_retry_init;
     }
   }
 }
 
 void WifiCheck(uint8_t param)
 {
-  Wifi.counter--;
+  wifi_counter--;
+
   switch (param) {
   case WIFI_SERIAL:
   case WIFI_SMARTCONFIG:
@@ -459,21 +480,25 @@ void WifiCheck(uint8_t param)
     WifiConfig(param);
     break;
   default:
-    if (Wifi.config_counter) {
-      Wifi.config_counter--;
-      Wifi.counter = Wifi.config_counter +5;
-      if (Wifi.config_counter) {
+    if (wifi_config_counter) {
+      /****************************************************************************************\
+      \****************************************************************************************/
+      //wifi_config_counter--;
+      /****************************************************************************************\
+      \****************************************************************************************/
+      wifi_counter = wifi_config_counter +5;
+      if (wifi_config_counter) {
 #ifdef USE_SMARTCONFIG
-        if ((WIFI_SMARTCONFIG == Wifi.config_type) && WiFi.smartConfigDone()) {
-          Wifi.config_counter = 0;
+        if ((WIFI_SMARTCONFIG == wifi_config_type) && WiFi.smartConfigDone()) {
+          wifi_config_counter = 0;
         }
 #endif  // USE_SMARTCONFIG
 #ifdef USE_WPS
-        if ((WIFI_WPSCONFIG == Wifi.config_type) && WifiWpsConfigDone()) {
-          Wifi.config_counter = 0;
+        if ((WIFI_WPSCONFIG == wifi_config_type) && WifiWpsConfigDone()) {
+          wifi_config_counter = 0;
         }
 #endif  // USE_WPS
-        if (!Wifi.config_counter) {
+        if (!wifi_config_counter) {
           if (strlen(WiFi.SSID().c_str())) {
             strlcpy(Settings.sta_ssid[0], WiFi.SSID().c_str(), sizeof(Settings.sta_ssid[0]));
           }
@@ -484,27 +509,27 @@ void WifiCheck(uint8_t param)
           AddLog_P2(LOG_LEVEL_INFO, PSTR(D_LOG_WIFI D_WCFG_1_SMARTCONFIG D_CMND_SSID "1 %s"), Settings.sta_ssid[0]);
         }
       }
-      if (!Wifi.config_counter) {
+      if (!wifi_config_counter) {
 #ifdef USE_SMARTCONFIG
-        if (WIFI_SMARTCONFIG == Wifi.config_type) { WiFi.stopSmartConfig(); }
+        if (WIFI_SMARTCONFIG == wifi_config_type) { WiFi.stopSmartConfig(); }
 #endif  // USE_SMARTCONFIG
 //        SettingsSdkErase();  //  Disabled v6.1.0b due to possible bad wifi connects
         restart_flag = 2;
       }
     } else {
-      if (Wifi.scan_state) { WifiBeginAfterScan(); }
+      if (wifi_scan_state) { WifiBeginAfterScan(); }
 
-      if (Wifi.counter <= 0) {
+      if (wifi_counter <= 0) {
         AddLog_P(LOG_LEVEL_DEBUG_MORE, S_LOG_WIFI, PSTR(D_CHECKING_CONNECTION));
-        Wifi.counter = WIFI_CHECK_SEC;
+        wifi_counter = WIFI_CHECK_SEC;
         WifiCheckIp();
       }
-      if ((WL_CONNECTED == WiFi.status()) && (static_cast<uint32_t>(WiFi.localIP()) != 0) && !Wifi.config_type) {
+      if ((WL_CONNECTED == WiFi.status()) && (static_cast<uint32_t>(WiFi.localIP()) != 0) && !wifi_config_type) {
         WifiSetState(1);
 
         if (Settings.flag3.use_wifi_rescan) {
           if (!(uptime % (60 * WIFI_RESCAN_MINUTES))) {
-            Wifi.scan_state = 2;
+            wifi_scan_state = 2;
           }
         }
 
@@ -517,14 +542,14 @@ void WifiCheck(uint8_t param)
 
 #ifdef USE_DISCOVERY
         if (Settings.flag3.mdns_enabled) {
-          if (!Wifi.mdns_begun) {
+          if (!mdns_begun) {
 //            if (mdns_delayed_start) {
 //              AddLog_P(LOG_LEVEL_INFO, PSTR(D_LOG_MDNS D_ATTEMPTING_CONNECTION));
 //              mdns_delayed_start--;
 //            } else {
 //              mdns_delayed_start = Settings.param[P_MDNS_DELAYED_START];
-              Wifi.mdns_begun = (uint8_t)MDNS.begin(my_hostname);
-              AddLog_P2(LOG_LEVEL_INFO, PSTR(D_LOG_MDNS "%s"), (Wifi.mdns_begun) ? D_INITIALIZED : D_FAILED);
+              mdns_begun = (uint8_t)MDNS.begin(my_hostname);
+              AddLog_P2(LOG_LEVEL_INFO, PSTR(D_LOG_MDNS "%s"), (mdns_begun) ? D_INITIALIZED : D_FAILED);
 //            }
           }
         }
@@ -535,8 +560,8 @@ void WifiCheck(uint8_t param)
           StartWebserver(Settings.webserver, WiFi.localIP());
 #ifdef USE_DISCOVERY
 #ifdef WEBSERVER_ADVERTISE
-          if (1 == Wifi.mdns_begun) {
-            Wifi.mdns_begun = 2;
+          if (1 == mdns_begun) {
+            mdns_begun = 2;
             MDNS.addService("http", "tcp", WEB_PORT);
           }
 #endif  // WEBSERVER_ADVERTISE
@@ -561,7 +586,7 @@ void WifiCheck(uint8_t param)
 #ifdef USE_EMULATION
         UdpDisconnect();
 #endif  // USE_EMULATION
-        Wifi.mdns_begun = 0;
+        mdns_begun = 0;
 #ifdef USE_KNX
         knx_started = false;
 #endif  // USE_KNX
@@ -575,18 +600,18 @@ int WifiState(void)
   int state = -1;
 
   if (!global_state.wifi_down) { state = WIFI_RESTART; }
-  if (Wifi.config_type) { state = Wifi.config_type; }
+  if (wifi_config_type) { state = wifi_config_type; }
   return state;
 }
 
-void WifiConnect(void)
+void  WifiConnect(void)
 {
   WifiSetState(0);
   WiFi.persistent(false);     // Solve possible wifi init errors
-  Wifi.status = 0;
-  Wifi.retry_init = WIFI_RETRY_OFFSET_SEC + ((ESP.getChipId() & 0xF) * 2);
-  Wifi.retry = Wifi.retry_init;
-  Wifi.counter = 1;
+  wifi_status = 0;
+  wifi_retry_init = WIFI_RETRY_OFFSET_SEC + ((ESP.getChipId() & 0xF) * 2);
+  wifi_retry = wifi_retry_init;
+  wifi_counter = 1;
 }
 
 // Enable from 6.0.0a until 6.1.0a - disabled due to possible cause of bad wifi connect on core 2.3.0
@@ -608,4 +633,20 @@ void EspRestart(void)
   WifiDisconnect();
 //  ESP.restart();            // This results in exception 3 on restarts on core 2.3.0
   ESP.reset();
+}
+
+/*
+void EspRestart(void)
+{
+  ESP.restart();
+}
+*/
+
+void WifiAddDelayWhenDisconnected(void)
+{
+  if (APP_BAUDRATE == baudrate) {  // When baudrate too low it will fail on Sonoff Pow R2 and S31 serial interface initialization
+    if (global_state.wifi_down) {
+      delay(DRIVER_BOOT_DELAY);
+    }
+  }
 }

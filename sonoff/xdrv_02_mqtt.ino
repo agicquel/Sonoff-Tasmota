@@ -56,13 +56,14 @@ void (* const MqttCommand[])(void) PROGMEM = {
   &CmndFullTopic, &CmndPrefix, &CmndGroupTopic, &CmndTopic, &CmndPublish,
   &CmndButtonTopic, &CmndSwitchTopic, &CmndButtonRetain, &CmndSwitchRetain, &CmndPowerRetain, &CmndSensorRetain };
 
-struct MQTT {
-  uint16_t connect_count = 0;            // MQTT re-connect count
-  uint16_t retry_counter = 1;            // MQTT connection retry counter
-  uint8_t initial_connection_state = 2;  // MQTT connection messages state
-  bool connected = false;                // MQTT virtual connection status
-  bool allowed = false;                  // MQTT enabled and parameters valid
-} Mqtt;
+IPAddress mqtt_host_addr;                   // MQTT host IP address
+uint32_t mqtt_host_hash = 0;                // MQTT host name hash
+
+uint16_t mqtt_connect_count = 0;            // MQTT re-connect count
+uint16_t mqtt_retry_counter = 1;            // MQTT connection retry counter
+uint8_t mqtt_initial_connection_state = 2;  // MQTT connection messages state
+bool mqtt_connected = false;                // MQTT virtual connection status
+bool mqtt_allowed = false;                  // MQTT enabled and parameters valid
 
 #ifdef USE_MQTT_TLS
 
@@ -150,7 +151,7 @@ void MakeValidMqtt(uint32_t option, char* str)
 #ifdef MQTT_HOST_DISCOVERY
 void MqttDiscoverServer(void)
 {
-  if (!Wifi.mdns_begun) { return; }
+  if (!mdns_begun) { return; }
 
   int n = MDNS.queryService("mqtt", "tcp");  // Search for mqtt service
 
@@ -290,7 +291,7 @@ void MqttDataHandler(char* topic, uint8_t* data, unsigned int data_len)
 
 void MqttRetryCounter(uint8_t value)
 {
-  Mqtt.retry_counter = value;
+  mqtt_retry_counter = value;
 }
 
 void MqttSubscribe(const char *topic)
@@ -451,20 +452,20 @@ void MqttPublishPowerBlinkState(uint32_t device)
 
 uint16_t MqttConnectCount()
 {
-  return Mqtt.connect_count;
+  return mqtt_connect_count;
 }
 
 void MqttDisconnected(int state)
 {
-  Mqtt.connected = false;
-  Mqtt.retry_counter = Settings.mqtt_retry;
+  mqtt_connected = false;
+  mqtt_retry_counter = Settings.mqtt_retry;
 
   MqttClient.disconnect();
 
 #if defined(USE_MQTT_TLS) && defined(USE_MQTT_AWS_IOT)
-  AddLog_P2(LOG_LEVEL_INFO, PSTR(D_LOG_MQTT D_CONNECT_FAILED_TO " %s:%d, rc %d. " D_RETRY_IN " %d " D_UNIT_SECOND), AWS_endpoint, Settings.mqtt_port, state, Mqtt.retry_counter);
+  AddLog_P2(LOG_LEVEL_INFO, PSTR(D_LOG_MQTT D_CONNECT_FAILED_TO " %s:%d, rc %d. " D_RETRY_IN " %d " D_UNIT_SECOND), AWS_endpoint, Settings.mqtt_port, state, mqtt_retry_counter);
 #else
-  AddLog_P2(LOG_LEVEL_INFO, PSTR(D_LOG_MQTT D_CONNECT_FAILED_TO " %s:%d, rc %d. " D_RETRY_IN " %d " D_UNIT_SECOND), Settings.mqtt_host, Settings.mqtt_port, state, Mqtt.retry_counter);
+  AddLog_P2(LOG_LEVEL_INFO, PSTR(D_LOG_MQTT D_CONNECT_FAILED_TO " %s:%d, rc %d. " D_RETRY_IN " %d " D_UNIT_SECOND), Settings.mqtt_host, Settings.mqtt_port, state, mqtt_retry_counter);
 #endif
   rules_flag.mqtt_disconnected = 1;
 }
@@ -473,11 +474,11 @@ void MqttConnected(void)
 {
   char stopic[TOPSZ];
 
-  if (Mqtt.allowed) {
+  if (mqtt_allowed) {
     AddLog_P(LOG_LEVEL_INFO, S_LOG_MQTT, PSTR(D_CONNECTED));
-    Mqtt.connected = true;
-    Mqtt.retry_counter = 0;
-    Mqtt.connect_count++;
+    mqtt_connected = true;
+    mqtt_retry_counter = 0;
+    mqtt_connect_count++;
 
     GetTopic_P(stopic, TELE, mqtt_topic, S_LWT);
     Response_P(PSTR(D_ONLINE));
@@ -499,7 +500,7 @@ void MqttConnected(void)
     XdrvCall(FUNC_MQTT_SUBSCRIBE);
   }
 
-  if (Mqtt.initial_connection_state) {
+  if (mqtt_initial_connection_state) {
     Response_P(PSTR("{\"" D_CMND_MODULE "\":\"%s\",\"" D_JSON_VERSION "\":\"%s%s\",\"" D_JSON_FALLBACKTOPIC "\":\"%s\",\"" D_CMND_GROUPTOPIC "\":\"%s\"}"),
       ModuleName().c_str(), my_version, my_image, GetFallbackTopic_P(stopic, CMND, ""), Settings.mqtt_grptopic);
     MqttPublishPrefixTopic_P(TELE, PSTR(D_RSLT_INFO "1"));
@@ -517,7 +518,7 @@ void MqttConnected(void)
     rules_flag.system_boot = 1;
     XdrvCall(FUNC_MQTT_INIT);
   }
-  Mqtt.initial_connection_state = 0;
+  mqtt_initial_connection_state = 0;
 
   global_state.mqtt_down = 0;
   if (Settings.flag.mqtt_enabled) {
@@ -529,24 +530,24 @@ void MqttReconnect(void)
 {
   char stopic[TOPSZ];
 
-  Mqtt.allowed = Settings.flag.mqtt_enabled;
-  if (Mqtt.allowed) {
+  mqtt_allowed = Settings.flag.mqtt_enabled;
+  if (mqtt_allowed) {
 #ifdef USE_DISCOVERY
 #ifdef MQTT_HOST_DISCOVERY
     MqttDiscoverServer();
 #endif  // MQTT_HOST_DISCOVERY
 #endif  // USE_DISCOVERY
     if (!strlen(Settings.mqtt_host) || !Settings.mqtt_port) {
-      Mqtt.allowed = false;
+      mqtt_allowed = false;
     }
 #if defined(USE_MQTT_TLS) && defined(USE_MQTT_AWS_IOT)
     // don't enable MQTT for AWS IoT if Private Key or Certificate are not set
     if (!AWS_IoT_Private_Key || !AWS_IoT_Client_Certificate) {
-      Mqtt.allowed = false;
+      mqtt_allowed = false;
     }
 #endif
   }
-  if (!Mqtt.allowed) {
+  if (!mqtt_allowed) {
     MqttConnected();
     return;
   }
@@ -557,8 +558,8 @@ void MqttReconnect(void)
 
   AddLog_P(LOG_LEVEL_INFO, S_LOG_MQTT, PSTR(D_ATTEMPTING_CONNECTION));
 
-  Mqtt.connected = false;
-  Mqtt.retry_counter = Settings.mqtt_retry;
+  mqtt_connected = false;
+  mqtt_retry_counter = Settings.mqtt_retry;
   global_state.mqtt_down = 1;
 
   char *mqtt_user = nullptr;
@@ -577,8 +578,8 @@ void MqttReconnect(void)
   MqttClient.setClient(EspClient);
 #endif
 
-  if (2 == Mqtt.initial_connection_state) {  // Executed once just after power on and wifi is connected
-    Mqtt.initial_connection_state = 1;
+  if (2 == mqtt_initial_connection_state) {  // Executed once just after power on and wifi is connected
+    mqtt_initial_connection_state = 1;
   }
 
   MqttClient.setCallback(MqttDataHandler);
@@ -661,22 +662,22 @@ void MqttCheck(void)
   if (Settings.flag.mqtt_enabled) {
     if (!MqttIsConnected()) {
       global_state.mqtt_down = 1;
-      if (!Mqtt.retry_counter) {
+      if (!mqtt_retry_counter) {
 #ifdef USE_DISCOVERY
 #ifdef MQTT_HOST_DISCOVERY
-        if (!strlen(Settings.mqtt_host) && !Wifi.mdns_begun) { return; }
+        if (!strlen(Settings.mqtt_host) && !mdns_begun) { return; }
 #endif  // MQTT_HOST_DISCOVERY
 #endif  // USE_DISCOVERY
         MqttReconnect();
       } else {
-        Mqtt.retry_counter--;
+        mqtt_retry_counter--;
       }
     } else {
       global_state.mqtt_down = 0;
     }
   } else {
     global_state.mqtt_down = 0;
-    if (Mqtt.initial_connection_state) MqttReconnect();
+    if (mqtt_initial_connection_state) MqttReconnect();
   }
 }
 
@@ -754,7 +755,7 @@ void CmndMqttRetry(void)
 {
   if ((XdrvMailbox.payload >= MQTT_RETRY_SECS) && (XdrvMailbox.payload < 32001)) {
     Settings.mqtt_retry = XdrvMailbox.payload;
-    Mqtt.retry_counter = Settings.mqtt_retry;
+    mqtt_retry_counter = Settings.mqtt_retry;
   }
   ResponseCmndNumber(Settings.mqtt_retry);
 }

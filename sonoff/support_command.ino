@@ -333,14 +333,10 @@ void CmndStatus(void)
   if ((0 == payload) || (4 == payload)) {
     Response_P(PSTR("{\"" D_CMND_STATUS D_STATUS4_MEMORY "\":{\"" D_JSON_PROGRAMSIZE "\":%d,\"" D_JSON_FREEMEMORY "\":%d,\"" D_JSON_HEAPSIZE "\":%d,\""
                           D_JSON_PROGRAMFLASHSIZE "\":%d,\"" D_JSON_FLASHSIZE "\":%d,\"" D_JSON_FLASHCHIPID "\":\"%06X\",\"" D_JSON_FLASHMODE "\":%d,\""
-                          D_JSON_FEATURES "\":[\"%08X\",\"%08X\",\"%08X\",\"%08X\",\"%08X\",\"%08X\"]"),
+                          D_JSON_FEATURES "\":[\"%08X\",\"%08X\",\"%08X\",\"%08X\",\"%08X\",\"%08X\"]}}"),
                           ESP.getSketchSize()/1024, ESP.getFreeSketchSpace()/1024, ESP.getFreeHeap()/1024,
                           ESP.getFlashChipSize()/1024, ESP.getFlashChipRealSize()/1024, ESP.getFlashChipId(), ESP.getFlashChipMode(),
                           LANGUAGE_LCID, feature_drv1, feature_drv2, feature_sns1, feature_sns2, feature5);
-    XsnsDriverState();
-    ResponseAppend_P(PSTR(",\"Sensors\":"));
-    XsnsSensorState();
-    ResponseAppend_P(PSTR("}}"));
     MqttPublishPrefixTopic_P(option, PSTR(D_CMND_STATUS "4"));
   }
 
@@ -621,9 +617,6 @@ void CmndSetoption(void)
           if (18 == pindex) { // SetOption68 for multi-channel PWM, requires a reboot
             restart_flag = 2;
           }
-          if (15 == pindex) { // SetOption65 for tuya_disable_dimmer requires a reboot
-            restart_flag = 2;
-          }
         }
       }
       else {                   // SetOption32 .. 49
@@ -647,17 +640,13 @@ void CmndSetoption(void)
               LightUpdateColorMapping();
               break;
 #endif
-#if (defined(USE_IR_REMOTE) && defined(USE_IR_RECEIVE)) || defined(USE_IR_REMOTE_FULL)
+#if defined(USE_IR_REMOTE) && defined(USE_IR_RECEIVE)
             case P_IR_UNKNOW_THRESHOLD:
               IrReceiveUpdateThreshold();
               break;
 #endif
 #ifdef USE_TUYA_DIMMER
             case P_TUYA_RELAYS:
-            case P_TUYA_POWER_ID:
-            case P_TUYA_CURRENT_ID:
-            case P_TUYA_VOLTAGE_ID:
-            case P_TUYA_DIMMER_MAX:
               restart_flag = 2;  // Need a restart to update GUI
               break;
 #endif
@@ -961,12 +950,12 @@ void CmndSwitchDebounce(void)
 
 void CmndBaudrate(void)
 {
-  if (XdrvMailbox.payload >= 300) {
-    XdrvMailbox.payload /= 300;  // Make it a valid baudrate
-    baudrate = (XdrvMailbox.payload & 0xFFFF) * 300;
+  if (XdrvMailbox.payload > 1200) {
+    XdrvMailbox.payload /= 1200;  // Make it a valid baudrate
+    baudrate = XdrvMailbox.payload * 1200;
     SetSerialBaudrate(baudrate);
   }
-  ResponseCmndNumber(Settings.baudrate * 300);
+  ResponseCmndNumber(Settings.baudrate * 1200);
 }
 
 void CmndSerialSend(void)

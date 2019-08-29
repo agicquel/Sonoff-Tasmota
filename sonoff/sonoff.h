@@ -24,7 +24,7 @@
  * Performance ROM (PROGMEM) vs RAM (RODATA)
 \*********************************************************************************************/
 
-#define XFUNC_PTR_IN_ROM                    // Enable for keeping tables in ROM (PROGMEM) which seem to have access issues on some flash types
+//#define XFUNC_PTR_IN_ROM                    // Enable for keeping tables in ROM (PROGMEM) which seem to have access issues on some flash types
 
 /*********************************************************************************************\
  * Default sensor states
@@ -109,7 +109,7 @@ const uint8_t STATES = 20;                  // Number of states per second using
 const uint8_t IMMINENT_RESET_FACTOR = 10;   // Factor to extent button hold time for imminent Reset to default 40 seconds using KEY_HOLD_TIME of 40
 const uint32_t BOOT_LOOP_TIME = 10;         // Number of seconds to stop detecting boot loops
 const uint16_t SYSLOG_TIMER = 600;          // Seconds to restore syslog_level
-const uint16_t SERIALLOG_TIMER = 600;       // Seconds to disable SerialLog
+const uint16_t SERIALLOG_TIMER = 6000;       // Seconds to disable SerialLog
 const uint8_t OTA_ATTEMPTS = 5;             // Number of times to try fetching the new firmware
 
 const uint16_t INPUT_BUFFER_SIZE = 520;     // Max number of characters in (serial and http) command buffer
@@ -231,13 +231,11 @@ enum ButtonStates { PRESSED, NOT_PRESSED };
 
 enum Shortcuts { SC_CLEAR, SC_DEFAULT, SC_USER };
 
-enum SettingsParamIndex {P_HOLD_TIME, P_MAX_POWER_RETRY, P_TUYA_DIMMER_ID, P_MDNS_DELAYED_START, P_BOOT_LOOP_OFFSET, P_RGB_REMAP, P_IR_UNKNOW_THRESHOLD,  // SetOption32 .. SetOption38
+enum SettingsParmaIndex {P_HOLD_TIME, P_MAX_POWER_RETRY, P_TUYA_DIMMER_ID, P_MDNS_DELAYED_START, P_BOOT_LOOP_OFFSET, P_RGB_REMAP, P_IR_UNKNOW_THRESHOLD,  // SetOption32 .. SetOption38
                          P_CSE7766_INVALID_POWER, P_HOLD_IGNORE, P_TUYA_RELAYS, P_OVER_TEMP,  // SetOption39 .. SetOption42
-                         P_TUYA_DIMMER_MAX, P_TUYA_VOLTAGE_ID, P_TUYA_CURRENT_ID, P_TUYA_POWER_ID,  // SetOption43 .. SetOption46
-                         P_ENERGY_TARIFF1, P_ENERGY_TARIFF2,  // SetOption47 .. SetOption48
                          P_MAX_PARAM8};  // Max is PARAM8_SIZE (18) - SetOption32 until SetOption49
 
-enum DomoticzSensors {DZ_TEMP, DZ_TEMP_HUM, DZ_TEMP_HUM_BARO, DZ_POWER_ENERGY, DZ_ILLUMINANCE, DZ_COUNT, DZ_VOLTAGE, DZ_CURRENT, DZ_AIRQUALITY, DZ_P1_SMART_METER, DZ_MAX_SENSORS};
+enum DomoticzSensors {DZ_TEMP, DZ_TEMP_HUM, DZ_TEMP_HUM_BARO, DZ_POWER_ENERGY, DZ_ILLUMINANCE, DZ_COUNT, DZ_VOLTAGE, DZ_CURRENT, DZ_AIRQUALITY, DZ_MAX_SENSORS};
 
 enum Ws2812ClockIndex { WS_SECOND, WS_MINUTE, WS_HOUR, WS_MARKER };
 enum Ws2812Color { WS_RED, WS_GREEN, WS_BLUE };
@@ -263,5 +261,13 @@ enum CommandSource { SRC_IGNORE, SRC_MQTT, SRC_RESTART, SRC_BUTTON, SRC_SWITCH, 
 const char kCommandSource[] PROGMEM = "I|MQTT|Restart|Button|Switch|Backlog|Serial|WebGui|WebCommand|WebConsole|PulseTimer|Timer|Rule|MaxPower|MaxEnergy|Overtemp|Light|Knx|Display|Wemo|Hue|Retry|Remote";
 
 const uint8_t kDefaultRfCode[9] PROGMEM = { 0x21, 0x16, 0x01, 0x0E, 0x03, 0x48, 0x2E, 0x1A, 0x00 };
+
+/*********************************************************************************************\
+ * Extern global variables
+\*********************************************************************************************/
+
+extern uint8_t light_device;  // Light device number
+extern power_t light_power;  // Light power
+extern uint8_t rotary_changed; // Rotary switch changed
 
 #endif  // _SONOFF_H_

@@ -76,7 +76,7 @@ void GetFeatures(void)
 #ifdef USE_WS2812_DMA
   feature_drv1 |= 0x00010000;  // xdrv_04_light.ino
 #endif
-#if defined(USE_IR_REMOTE) || defined(USE_IR_REMOTE_FULL)
+#ifdef USE_IR_REMOTE
   feature_drv1 |= 0x00020000;  // xdrv_05_irremote.ino
 #endif
 #ifdef USE_IR_HVAC
@@ -165,6 +165,7 @@ void GetFeatures(void)
 #ifdef USE_DISPLAY_SH1106
   feature_drv2 |= 0x00001000;  // xdsp_06_sh1106.ino
 #endif
+
 #ifdef USE_MP3_PLAYER
   feature_drv2 |= 0x00002000;  // xdrv_14_mp3.ino
 #endif
@@ -418,12 +419,8 @@ void GetFeatures(void)
 #ifdef USE_CHIRP
   feature_sns2 |= 0x20000000;  // xsns_48_chirp.ino
 #endif
-#ifdef USE_SOLAX_X1
-  feature_sns2 |= 0x40000000;  // xsns_49_solaxX1.ino
-#endif
-#ifdef USE_PAJ7620
-  feature_sns2 |= 0x80000000;  // xsns_50_paj7620.ino
-#endif
+//  feature_sns2 |= 0x40000000;
+//  feature_sns2 |= 0x80000000;
 
 /*********************************************************************************************/
 
@@ -432,12 +429,8 @@ void GetFeatures(void)
 #ifdef USE_BUZZER
   feature5 |= 0x00000001;  // xdrv_24_buzzer.ino
 #endif
-#ifdef USE_RDM6300
-  feature5 |= 0x00000002;  // xsns_51_rdm6300.ino
-#endif
-#ifdef USE_IBEACON
-  feature5 |= 0x00000004;  // xsns_52_ibeacon.ino
-#endif
+//  feature5 |= 0x00000002;
+//  feature5 |= 0x00000004;
 //  feature5 |= 0x00000008;
 
 //  feature5 |= 0x00000010;

@@ -629,13 +629,13 @@ void MqttShowState(void)
   ResponseAppend_P(PSTR(",\"" D_JSON_HEAPSIZE "\":%d,\"SleepMode\":\"%s\",\"Sleep\":%u,\"LoadAvg\":%u,\"MqttCount\":%u"),
     ESP.getFreeHeap()/1024, GetTextIndexed(stemp1, sizeof(stemp1), Settings.flag3.sleep_normal, kSleepMode), sleep, loop_load_avg, MqttConnectCount());
 
-  for (uint32_t i = 1; i <= devices_present; i++) {
+  for (uint32_t i = 0; i < devices_present; i++) {
 #ifdef USE_LIGHT
-    if ((LightDevice()) && (i >= LightDevice())) {
-      if (i == LightDevice())  { LightState(1); }    // call it only once
+    if (i == light_device -1) {
+      LightState(1);
     } else {
 #endif
-      ResponseAppend_P(PSTR(",\"%s\":\"%s\""), GetPowerDevice(stemp1, i, sizeof(stemp1), Settings.flag.device_index_enable), GetStateText(bitRead(power, i-1)));
+      ResponseAppend_P(PSTR(",\"%s\":\"%s\""), GetPowerDevice(stemp1, i +1, sizeof(stemp1), Settings.flag.device_index_enable), GetStateText(bitRead(power, i)));
 #ifdef USE_SONOFF_IFAN
       if (IsModuleIfan()) {
         ResponseAppend_P(PSTR(",\"" D_CMND_FANSPEED "\":%d"), GetFanspeed());
@@ -854,7 +854,7 @@ void Every250mSeconds(void)
       if (200 == blinks) blinks = 0;                      // Disable blink
     }
   }
-  if (Settings.ledstate &1 && (pin[GPIO_LEDLNK] < 99 || !(blinks || restart_flag || ota_state_flag)) ) {
+  else if (Settings.ledstate &1) {
     bool tstate = power & Settings.ledmask;
     if ((SONOFF_TOUCH == my_module_type) || (SONOFF_T11 == my_module_type) || (SONOFF_T12 == my_module_type) || (SONOFF_T13 == my_module_type)) {
       tstate = (!power) ? 1 : 0;                          // As requested invert signal for Touch devices to find them in the dark
@@ -1188,256 +1188,257 @@ void SerialInput(void)
 
 void GpioInit(void)
 {
-  uint8_t mpin;
+    uint8_t mpin;
 
-  if (!ValidModule(Settings.module)) {
-    uint8_t module = MODULE;
-    if (!ValidModule(MODULE)) { module = SONOFF_BASIC; }
-    Settings.module = module;
-    Settings.last_module = module;
-  }
-  SetModuleType();
-
-  if (Settings.module != Settings.last_module) {
-    baudrate = APP_BAUDRATE;
-  }
-
-  for (uint32_t i = 0; i < sizeof(Settings.user_template.gp); i++) {
-    if ((Settings.user_template.gp.io[i] >= GPIO_SENSOR_END) && (Settings.user_template.gp.io[i] < GPIO_USER)) {
-      Settings.user_template.gp.io[i] = GPIO_USER;  // Fix not supported sensor ids in template
+    if (!ValidModule(Settings.module)) {
+      uint8_t module = MODULE;
+      if (!ValidModule(MODULE)) { module = SONOFF_BASIC; }
+      Settings.module = module;
+      Settings.last_module = module;
     }
-  }
+    SetModuleType();
 
-  myio def_gp;
-  ModuleGpios(&def_gp);
-  for (uint32_t i = 0; i < sizeof(Settings.my_gp); i++) {
-    if ((Settings.my_gp.io[i] >= GPIO_SENSOR_END) && (Settings.my_gp.io[i] < GPIO_USER)) {
-      Settings.my_gp.io[i] = GPIO_NONE;             // Fix not supported sensor ids in module
+    if (Settings.module != Settings.last_module) {
+      baudrate = APP_BAUDRATE;
     }
-    else if (Settings.my_gp.io[i] > GPIO_NONE) {
-      my_module.io[i] = Settings.my_gp.io[i];       // Set User selected Module sensors
+
+    for (uint32_t i = 0; i < sizeof(Settings.user_template.gp); i++) {
+      if ((Settings.user_template.gp.io[i] >= GPIO_SENSOR_END) && (Settings.user_template.gp.io[i] < GPIO_USER)) {
+        Settings.user_template.gp.io[i] = GPIO_USER;  // Fix not supported sensor ids in template
+      }
     }
-    if ((def_gp.io[i] > GPIO_NONE) && (def_gp.io[i] < GPIO_USER)) {
-      my_module.io[i] = def_gp.io[i];               // Force Template override
+
+    myio def_gp;
+    ModuleGpios(&def_gp);
+    for (uint32_t i = 0; i < sizeof(Settings.my_gp); i++) {
+      if ((Settings.my_gp.io[i] >= GPIO_SENSOR_END) && (Settings.my_gp.io[i] < GPIO_USER)) {
+        Settings.my_gp.io[i] = GPIO_NONE;             // Fix not supported sensor ids in module
+      }
+      else if (Settings.my_gp.io[i] > GPIO_NONE) {
+        my_module.io[i] = Settings.my_gp.io[i];       // Set User selected Module sensors
+      }
+      if ((def_gp.io[i] > GPIO_NONE) && (def_gp.io[i] < GPIO_USER)) {
+        my_module.io[i] = def_gp.io[i];               // Force Template override
+      }
     }
-  }
-  if ((Settings.my_adc0 >= ADC0_END) && (Settings.my_adc0 < ADC0_USER)) {
-    Settings.my_adc0 = ADC0_NONE;                   // Fix not supported sensor ids in module
-  }
-  else if (Settings.my_adc0 > ADC0_NONE) {
-    my_adc0 = Settings.my_adc0;                     // Set User selected Module sensors
-  }
-  my_module_flag = ModuleFlag();
-  uint8_t template_adc0 = my_module_flag.data &15;
-  if ((template_adc0 > ADC0_NONE) && (template_adc0 < ADC0_USER)) {
-    my_adc0 = template_adc0;                        // Force Template override
-  }
-
-  for (uint32_t i = 0; i < GPIO_MAX; i++) {
-    pin[i] = 99;
-  }
-  for (uint32_t i = 0; i < sizeof(my_module.io); i++) {
-    mpin = ValidPin(i, my_module.io[i]);
-
-    DEBUG_CORE_LOG(PSTR("INI: gpio pin %d, mpin %d"), i, mpin);
-
-    if (mpin) {
-      XdrvMailbox.index = mpin;
-      XdrvMailbox.payload = i;
-
-      if ((mpin >= GPIO_SWT1_NP) && (mpin < (GPIO_SWT1_NP + MAX_SWITCHES))) {
-        SwitchPullupFlag(mpin - GPIO_SWT1_NP);
-        mpin -= (GPIO_SWT1_NP - GPIO_SWT1);
-      }
-      else if ((mpin >= GPIO_KEY1_NP) && (mpin < (GPIO_KEY1_NP + MAX_KEYS))) {
-        ButtonPullupFlag(mpin - GPIO_KEY1_NP);       //  0 .. 3
-        mpin -= (GPIO_KEY1_NP - GPIO_KEY1);
-      }
-      else if ((mpin >= GPIO_KEY1_INV) && (mpin < (GPIO_KEY1_INV + MAX_KEYS))) {
-        ButtonInvertFlag(mpin - GPIO_KEY1_INV);      //  0 .. 3
-        mpin -= (GPIO_KEY1_INV - GPIO_KEY1);
-      }
-      else if ((mpin >= GPIO_KEY1_INV_NP) && (mpin < (GPIO_KEY1_INV_NP + MAX_KEYS))) {
-        ButtonPullupFlag(mpin - GPIO_KEY1_INV_NP);   //  0 .. 3
-        ButtonInvertFlag(mpin - GPIO_KEY1_INV_NP);   //  0 .. 3
-        mpin -= (GPIO_KEY1_INV_NP - GPIO_KEY1);
-      }
-      else if ((mpin >= GPIO_REL1_INV) && (mpin < (GPIO_REL1_INV + MAX_RELAYS))) {
-        bitSet(rel_inverted, mpin - GPIO_REL1_INV);
-        mpin -= (GPIO_REL1_INV - GPIO_REL1);
-      }
-      else if ((mpin >= GPIO_LED1_INV) && (mpin < (GPIO_LED1_INV + MAX_LEDS))) {
-        bitSet(led_inverted, mpin - GPIO_LED1_INV);
-        mpin -= (GPIO_LED1_INV - GPIO_LED1);
-      }
-      else if (mpin == GPIO_LEDLNK_INV) {
-        ledlnk_inverted = 1;
-        mpin -= (GPIO_LEDLNK_INV - GPIO_LEDLNK);
-      }
-      else if ((mpin >= GPIO_PWM1_INV) && (mpin < (GPIO_PWM1_INV + MAX_PWMS))) {
-        bitSet(pwm_inverted, mpin - GPIO_PWM1_INV);
-        mpin -= (GPIO_PWM1_INV - GPIO_PWM1);
-      }
-      else if (XdrvCall(FUNC_PIN_STATE)) {
-        mpin = XdrvMailbox.index;
-      }
-      else if (XsnsCall(FUNC_PIN_STATE)) {
-        mpin = XdrvMailbox.index;
-      };
+    if ((Settings.my_adc0 >= ADC0_END) && (Settings.my_adc0 < ADC0_USER)) {
+      Settings.my_adc0 = ADC0_NONE;                   // Fix not supported sensor ids in module
     }
-    if (mpin) pin[mpin] = i;
-  }
+    else if (Settings.my_adc0 > ADC0_NONE) {
+      my_adc0 = Settings.my_adc0;                     // Set User selected Module sensors
+    }
+    my_module_flag = ModuleFlag();
+    uint8_t template_adc0 = my_module_flag.data &15;
+    if ((template_adc0 > ADC0_NONE) && (template_adc0 < ADC0_USER)) {
+      my_adc0 = template_adc0;                        // Force Template override
+    }
 
-  if ((2 == pin[GPIO_TXD]) || (H801 == my_module_type)) { Serial.set_tx(2); }
-
-  analogWriteRange(Settings.pwm_range);      // Default is 1023 (Arduino.h)
-  analogWriteFreq(Settings.pwm_frequency);   // Default is 1000 (core_esp8266_wiring_pwm.c)
-
-#ifdef USE_SPI
-  spi_flg = ((((pin[GPIO_SPI_CS] < 99) && (pin[GPIO_SPI_CS] > 14)) || (pin[GPIO_SPI_CS] < 12)) || (((pin[GPIO_SPI_DC] < 99) && (pin[GPIO_SPI_DC] > 14)) || (pin[GPIO_SPI_DC] < 12)));
-  if (spi_flg) {
     for (uint32_t i = 0; i < GPIO_MAX; i++) {
-      if ((pin[i] >= 12) && (pin[i] <=14)) pin[i] = 99;
+      pin[i] = 99;
     }
-    my_module.io[12] = GPIO_SPI_MISO;
-    pin[GPIO_SPI_MISO] = 12;
-    my_module.io[13] = GPIO_SPI_MOSI;
-    pin[GPIO_SPI_MOSI] = 13;
-    my_module.io[14] = GPIO_SPI_CLK;
-    pin[GPIO_SPI_CLK] = 14;
-  }
-  soft_spi_flg = ((pin[GPIO_SSPI_CS] < 99) && (pin[GPIO_SSPI_SCLK] < 99) && ((pin[GPIO_SSPI_MOSI] < 99) || (pin[GPIO_SSPI_MOSI] < 99)));
-#endif  // USE_SPI
+    for (uint32_t i = 0; i < sizeof(my_module.io); i++) {
+      mpin = ValidPin(i, my_module.io[i]);
 
-#ifdef USE_I2C
-  i2c_flg = ((pin[GPIO_I2C_SCL] < 99) && (pin[GPIO_I2C_SDA] < 99));
-  if (i2c_flg) {
-    Wire.begin(pin[GPIO_I2C_SDA], pin[GPIO_I2C_SCL]);
-  }
-#endif  // USE_I2C
+      DEBUG_CORE_LOG(PSTR("INI: gpio pin %d, mpin %d"), i, mpin);
 
-  devices_present = 1;
+      if (mpin) {
+        XdrvMailbox.index = mpin;
+        XdrvMailbox.payload = i;
 
-  light_type = LT_BASIC;                     // Use basic PWM control if SetOption15 = 0
-#ifdef USE_LIGHT
-  if (Settings.flag.pwm_control) {
-    for (uint32_t i = 0; i < MAX_PWMS; i++) {
-      if (pin[GPIO_PWM1 +i] < 99) { light_type++; }  // Use Dimmer/Color control for all PWM as SetOption15 = 1
+        if ((mpin >= GPIO_SWT1_NP) && (mpin < (GPIO_SWT1_NP + MAX_SWITCHES))) {
+          SwitchPullupFlag(mpin - GPIO_SWT1_NP);
+          mpin -= (GPIO_SWT1_NP - GPIO_SWT1);
+        }
+        else if ((mpin >= GPIO_KEY1_NP) && (mpin < (GPIO_KEY1_NP + MAX_KEYS))) {
+          ButtonPullupFlag(mpin - GPIO_KEY1_NP);       //  0 .. 3
+          mpin -= (GPIO_KEY1_NP - GPIO_KEY1);
+        }
+        else if ((mpin >= GPIO_KEY1_INV) && (mpin < (GPIO_KEY1_INV + MAX_KEYS))) {
+          ButtonInvertFlag(mpin - GPIO_KEY1_INV);      //  0 .. 3
+          mpin -= (GPIO_KEY1_INV - GPIO_KEY1);
+        }
+        else if ((mpin >= GPIO_KEY1_INV_NP) && (mpin < (GPIO_KEY1_INV_NP + MAX_KEYS))) {
+          ButtonPullupFlag(mpin - GPIO_KEY1_INV_NP);   //  0 .. 3
+          ButtonInvertFlag(mpin - GPIO_KEY1_INV_NP);   //  0 .. 3
+          mpin -= (GPIO_KEY1_INV_NP - GPIO_KEY1);
+        }
+        else if ((mpin >= GPIO_REL1_INV) && (mpin < (GPIO_REL1_INV + MAX_RELAYS))) {
+          bitSet(rel_inverted, mpin - GPIO_REL1_INV);
+          mpin -= (GPIO_REL1_INV - GPIO_REL1);
+        }
+        else if ((mpin >= GPIO_LED1_INV) && (mpin < (GPIO_LED1_INV + MAX_LEDS))) {
+          bitSet(led_inverted, mpin - GPIO_LED1_INV);
+          mpin -= (GPIO_LED1_INV - GPIO_LED1);
+        }
+        else if (mpin == GPIO_LEDLNK_INV) {
+          ledlnk_inverted = 1;
+          mpin -= (GPIO_LEDLNK_INV - GPIO_LEDLNK);
+        }
+        else if ((mpin >= GPIO_PWM1_INV) && (mpin < (GPIO_PWM1_INV + MAX_PWMS))) {
+          bitSet(pwm_inverted, mpin - GPIO_PWM1_INV);
+          mpin -= (GPIO_PWM1_INV - GPIO_PWM1);
+        }
+        else if (XdrvCall(FUNC_PIN_STATE)) {
+          mpin = XdrvMailbox.index;
+        }
+        else if (XsnsCall(FUNC_PIN_STATE)) {
+          mpin = XdrvMailbox.index;
+        };
+      }
+      if (mpin) pin[mpin] = i;
     }
-  }
-#endif  // USE_LIGHT
 
-  if (XdrvCall(FUNC_MODULE_INIT)) {
-    // Serviced
-  }
-  else if (YTF_IR_BRIDGE == my_module_type) {
-    ClaimSerial();  // Stop serial loopback mode
-  }
-  else if (SONOFF_DUAL == my_module_type) {
-    Settings.flag.mqtt_serial = 0;
-    devices_present = 2;
-    baudrate = 19200;
-  }
-  else if (CH4 == my_module_type) {
-    Settings.flag.mqtt_serial = 0;
-    devices_present = 4;
-    baudrate = 19200;
-  }
-  else if (SONOFF_SC == my_module_type) {
-    Settings.flag.mqtt_serial = 0;
-    devices_present = 0;
-    baudrate = 19200;
-  }
-#ifdef USE_LIGHT
-  else if (SONOFF_BN == my_module_type) {   // PWM Single color led (White)
-    light_type = LT_PWM1;
-  }
-  else if (SONOFF_LED == my_module_type) {  // PWM Dual color led (White warm and cold)
-    light_type = LT_PWM2;
-  }
-  else if (AILIGHT == my_module_type) {     // RGBW led
-    light_type = LT_RGBW;
-  }
-  else if (SONOFF_B1 == my_module_type) {   // RGBWC led
-    light_type = LT_RGBWC;
-  }
-#endif  // USE_LIGHT
-  else {
-    if (!light_type) { devices_present = 0; }
-    for (uint32_t i = 0; i < MAX_RELAYS; i++) {
-      if (pin[GPIO_REL1 +i] < 99) {
-        pinMode(pin[GPIO_REL1 +i], OUTPUT);
-        devices_present++;
-        if (EXS_RELAY == my_module_type) {
-          digitalWrite(pin[GPIO_REL1 +i], bitRead(rel_inverted, i) ? 1 : 0);
-          if (i &1) { devices_present--; }
+    if ((2 == pin[GPIO_TXD]) || (H801 == my_module_type)) { Serial.set_tx(2); }
+
+    analogWriteRange(Settings.pwm_range);      // Default is 1023 (Arduino.h)
+    analogWriteFreq(Settings.pwm_frequency);   // Default is 1000 (core_esp8266_wiring_pwm.c)
+
+  #ifdef USE_SPI
+    spi_flg = ((((pin[GPIO_SPI_CS] < 99) && (pin[GPIO_SPI_CS] > 14)) || (pin[GPIO_SPI_CS] < 12)) || (((pin[GPIO_SPI_DC] < 99) && (pin[GPIO_SPI_DC] > 14)) || (pin[GPIO_SPI_DC] < 12)));
+    if (spi_flg) {
+      for (uint32_t i = 0; i < GPIO_MAX; i++) {
+        if ((pin[i] >= 12) && (pin[i] <=14)) pin[i] = 99;
+      }
+      my_module.io[12] = GPIO_SPI_MISO;
+      pin[GPIO_SPI_MISO] = 12;
+      my_module.io[13] = GPIO_SPI_MOSI;
+      pin[GPIO_SPI_MOSI] = 13;
+      my_module.io[14] = GPIO_SPI_CLK;
+      pin[GPIO_SPI_CLK] = 14;
+    }
+    soft_spi_flg = ((pin[GPIO_SSPI_CS] < 99) && (pin[GPIO_SSPI_SCLK] < 99) && ((pin[GPIO_SSPI_MOSI] < 99) || (pin[GPIO_SSPI_MOSI] < 99)));
+  #endif  // USE_SPI
+
+  #ifdef USE_I2C
+    i2c_flg = ((pin[GPIO_I2C_SCL] < 99) && (pin[GPIO_I2C_SDA] < 99));
+    if (i2c_flg) {
+      Wire.begin(pin[GPIO_I2C_SDA], pin[GPIO_I2C_SCL]);
+    }
+  #endif  // USE_I2C
+
+    devices_present = 1;
+
+    light_type = LT_BASIC;                     // Use basic PWM control if SetOption15 = 0
+  #ifdef USE_LIGHT
+    if (Settings.flag.pwm_control) {
+      for (uint32_t i = 0; i < MAX_PWMS; i++) {
+        if (pin[GPIO_PWM1 +i] < 99) { light_type++; }  // Use Dimmer/Color control for all PWM as SetOption15 = 1
+      }
+    }
+  #endif  // USE_LIGHT
+
+    if (XdrvCall(FUNC_MODULE_INIT)) {
+      // Serviced
+    }
+    else if (YTF_IR_BRIDGE == my_module_type) {
+      ClaimSerial();  // Stop serial loopback mode
+    }
+    else if (SONOFF_DUAL == my_module_type) {
+      Settings.flag.mqtt_serial = 0;
+      devices_present = 2;
+      baudrate = 19200;
+    }
+    else if (CH4 == my_module_type) {
+      Settings.flag.mqtt_serial = 0;
+      devices_present = 4;
+      baudrate = 19200;
+    }
+    else if (SONOFF_SC == my_module_type) {
+      Settings.flag.mqtt_serial = 0;
+      devices_present = 0;
+      baudrate = 19200;
+    }
+  #ifdef USE_LIGHT
+    else if (SONOFF_BN == my_module_type) {   // PWM Single color led (White)
+      light_type = LT_PWM1;
+    }
+    else if (SONOFF_LED == my_module_type) {  // PWM Dual color led (White warm and cold)
+      light_type = LT_PWM2;
+    }
+    else if (AILIGHT == my_module_type) {     // RGBW led
+      light_type = LT_RGBW;
+    }
+    else if (SONOFF_B1 == my_module_type) {   // RGBWC led
+      light_type = LT_RGBWC;
+    }
+  #endif  // USE_LIGHT
+    else {
+      if (!light_type) { devices_present = 0; }
+      for (uint32_t i = 0; i < MAX_RELAYS; i++) {
+        if (pin[GPIO_REL1 +i] < 99) {
+          pinMode(pin[GPIO_REL1 +i], OUTPUT);
+          devices_present++;
+          if (EXS_RELAY == my_module_type) {
+            digitalWrite(pin[GPIO_REL1 +i], bitRead(rel_inverted, i) ? 1 : 0);
+            if (i &1) { devices_present--; }
+          }
         }
       }
     }
-  }
 
-  for (uint32_t i = 0; i < MAX_LEDS; i++) {
-    if (pin[GPIO_LED1 +i] < 99) {
-#ifdef USE_ARILUX_RF
-      if ((3 == i) && (leds_present < 2) && (99 == pin[GPIO_ARIRFSEL])) {
-        pin[GPIO_ARIRFSEL] = pin[GPIO_LED4];  // Legacy support where LED4 was Arilux RF enable
-        pin[GPIO_LED4] = 99;
-      } else {
-#endif
-        pinMode(pin[GPIO_LED1 +i], OUTPUT);
-        leds_present++;
-        digitalWrite(pin[GPIO_LED1 +i], bitRead(led_inverted, i));
-#ifdef USE_ARILUX_RF
-      }
-#endif
-    }
-  }
-  if (pin[GPIO_LEDLNK] < 99) {
-    pinMode(pin[GPIO_LEDLNK], OUTPUT);
-    digitalWrite(pin[GPIO_LEDLNK], ledlnk_inverted);
-  }
-
-  ButtonInit();
-  SwitchInit();
-#ifdef ROTARY_V1
-  RotaryInit();
-#endif
-
-#ifdef USE_LIGHT
-#ifdef USE_WS2812
-  if (!light_type && (pin[GPIO_WS2812] < 99)) {  // RGB led
-    devices_present++;
-    light_type = LT_WS2812;
-  }
-#endif  // USE_WS2812
-#ifdef USE_SM16716
-  if (SM16716_ModuleSelected()) {
-    light_type += 3;
-    light_type |= LT_SM16716;
-  }
-#endif  // USE_SM16716
-
-  // post-process for lights
-  if (Settings.flag3.pwm_multi_channels) {
-    uint32_t pwm_channels = (light_type & 7) > LST_MAX ? LST_MAX : (light_type & 7);
-    if (0 == pwm_channels) { pwm_channels = 1; }
-    devices_present += pwm_channels - 1;  // add the pwm channels controls at the end
-  }
-#endif  // USE_LIGHT
-  if (!light_type) {
-    for (uint32_t i = 0; i < MAX_PWMS; i++) {     // Basic PWM control only
-      if (pin[GPIO_PWM1 +i] < 99) {
-        pwm_present = true;
-        pinMode(pin[GPIO_PWM1 +i], OUTPUT);
-        analogWrite(pin[GPIO_PWM1 +i], bitRead(pwm_inverted, i) ? Settings.pwm_range - Settings.pwm_value[i] : Settings.pwm_value[i]);
+    for (uint32_t i = 0; i < MAX_LEDS; i++) {
+      if (pin[GPIO_LED1 +i] < 99) {
+  #ifdef USE_ARILUX_RF
+        if ((3 == i) && (leds_present < 2) && (99 == pin[GPIO_ARIRFSEL])) {
+          pin[GPIO_ARIRFSEL] = pin[GPIO_LED4];  // Legacy support where LED4 was Arilux RF enable
+          pin[GPIO_LED4] = 99;
+        } else {
+  #endif
+          pinMode(pin[GPIO_LED1 +i], OUTPUT);
+          leds_present++;
+          digitalWrite(pin[GPIO_LED1 +i], bitRead(led_inverted, i));
+  #ifdef USE_ARILUX_RF
+        }
+  #endif
       }
     }
-  }
+    if (pin[GPIO_LEDLNK] < 99) {
+      pinMode(pin[GPIO_LEDLNK], OUTPUT);
+      digitalWrite(pin[GPIO_LEDLNK], ledlnk_inverted);
+    }
 
-  SetLedPower(Settings.ledstate &8);
-  SetLedLink(Settings.ledstate &8);
+    ButtonInit();
+    
+    SwitchInit();
+  #ifdef ROTARY_V1
+    RotaryInit();
+  #endif
 
-  XdrvCall(FUNC_PRE_INIT);
+  #ifdef USE_LIGHT
+  #ifdef USE_WS2812
+    if (!light_type && (pin[GPIO_WS2812] < 99)) {  // RGB led
+      devices_present++;
+      light_type = LT_WS2812;
+    }
+  #endif  // USE_WS2812
+  #ifdef USE_SM16716
+    if (SM16716_ModuleSelected()) {
+      light_type += 3;
+      light_type |= LT_SM16716;
+    }
+  #endif  // USE_SM16716
+
+    // post-process for lights
+    if (Settings.flag3.pwm_multi_channels) {
+      uint32_t pwm_channels = (light_type & 7) > LST_MAX ? LST_MAX : (light_type & 7);
+      if (0 == pwm_channels) { pwm_channels = 1; }
+      devices_present += pwm_channels - 1;  // add the pwm channels controls at the end
+    }
+  #endif  // USE_LIGHT
+    if (!light_type) {
+      for (uint32_t i = 0; i < MAX_PWMS; i++) {     // Basic PWM control only
+        if (pin[GPIO_PWM1 +i] < 99) {
+          pwm_present = true;
+          pinMode(pin[GPIO_PWM1 +i], OUTPUT);
+          analogWrite(pin[GPIO_PWM1 +i], bitRead(pwm_inverted, i) ? Settings.pwm_range - Settings.pwm_value[i] : Settings.pwm_value[i]);
+        }
+      }
+    }
+
+    SetLedPower(Settings.ledstate &8);
+    SetLedLink(Settings.ledstate &8);
+
+    XdrvCall(FUNC_PRE_INIT);
 }
 
 extern "C" {
@@ -1476,7 +1477,7 @@ void setup(void)
     XdrvCall(FUNC_SETTINGS_OVERRIDE);
   }
 
-  baudrate = Settings.baudrate * 300;
+  baudrate = Settings.baudrate * 1200;
 //  mdns_delayed_start = Settings.param[P_MDNS_DELAYED_START];
   seriallog_level = Settings.seriallog_level;
   seriallog_timer = SERIALLOG_TIMER;
@@ -1534,7 +1535,15 @@ void setup(void)
 
   GpioInit();
 
-  SetSerialBaudrate(baudrate);
+  if(Settings.module == PASTEUR){
+    PasteurInit();
+    WiFiButtonInit();
+    SubscribeInit();
+    StatusButtonInit();
+  }
+
+
+  //SetSerialBaudrate(baudrate);
 
   WifiConnect();
 
@@ -1615,6 +1624,14 @@ void loop(void)
 
   ButtonLoop();
   SwitchLoop();
+
+  if(Settings.module == PASTEUR){
+    SubscribeLoop();
+    WiFiButtonLoop();
+    PasteurLoop();
+    StatusButtonLoop();
+  }
+  
 #ifdef ROTARY_V1
   RotaryLoop();
 #endif
